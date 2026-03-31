@@ -135,7 +135,7 @@
     .empty-state p{font-size:13.5px;max-width:360px;margin:0 auto 20px}
 
     /* ── SIGN-IN ── */
-    .signin-screen{display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 60px);padding:40px}
+    .signin-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:40px}
     .signin-card{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:44px 52px;box-shadow:var(--shadow-lg);max-width:460px;width:100%;text-align:center}
     .signin-icon{font-size:52px;margin-bottom:14px}
     .signin-card h2{font-size:24px;font-weight:700;margin-bottom:9px}
@@ -147,7 +147,7 @@
     .server-note code{background:var(--surface2);padding:1px 5px;border-radius:4px;font-family:monospace;font-size:11px}
 
     /* ── LOADING ── */
-    .loading-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:calc(100vh - 60px);gap:14px}
+    .loading-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;gap:14px}
     .spinner{width:38px;height:38px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
     @keyframes spin{to{transform:rotate(360deg)}}
     .loading-text{font-size:13.5px;color:var(--text2)}
@@ -239,7 +239,7 @@
 <div class="app">
 
   <!-- TOPBAR -->
-  <header class="topbar">
+  <header class="topbar" style="display:none">
     <div class="logo">📚 <span>Article Library</span></div>
     <div class="search-wrap">
       <span class="search-icon">🔍</span>
@@ -263,17 +263,12 @@
     <div class="signin-screen">
       <div class="signin-card">
         <div class="signin-icon">📚</div>
-        <h2>Kellan's Article Library</h2>
-        <p>Sign in with Google to load your <strong>Summarized Articles</strong> folder and access your full reading library.</p>
+        <h2>Article Library</h2>
+        <p>Sign in with Google to access your reading library.</p>
         <button class="google-btn" onclick="signIn()">
           <svg class="glogo" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
           Sign in with Google
         </button>
-        <div class="server-note">
-          ⚠️ Serve this file from <code>http://localhost:8080</code> for sign-in to work.<br/>
-          In the folder where this file lives, run: <code>python3 -m http.server 8080</code><br/>
-          Then open <a href="http://localhost:8080/summarized-articles.html" style="color:var(--accent)">http://localhost:8080/summarized-articles.html</a>
-        </div>
       </div>
     </div>
   </div>
@@ -621,9 +616,10 @@ function signIn(){if(typeof google==='undefined'){toast('Serve from http://local
 function signOut(){if(token)google.accounts.oauth2.revoke(token,()=>toast('Signed out.','info'));token=null;articles=[];archived=[];showSignin();updateBadge(false);}
 function handleAuthClick(){if(token)signOut();else signIn();}
 function updateBadge(on){const b=document.getElementById('authBadge');b.style.display='flex';document.getElementById('authDot').className='dot'+(on?'':' off');document.getElementById('authLabel').textContent=on?'Connected':'Connect';}
-function showSignin(){['signinScreen'].forEach(id=>document.getElementById(id).style.display='');['loadingScreen','mainApp'].forEach(id=>document.getElementById(id).style.display='none');['syncBtn','addBtn','goalBtn','shortcutsBtn'].forEach(id=>document.getElementById(id).style.display='none');}
-function showLoading(msg){document.getElementById('signinScreen').style.display='none';document.getElementById('loadingScreen').style.display='';document.getElementById('mainApp').style.display='none';document.getElementById('loadingText').textContent=msg||'Loading…';}
-function showApp(){document.getElementById('signinScreen').style.display='none';document.getElementById('loadingScreen').style.display='none';document.getElementById('mainApp').style.display='flex';['syncBtn','addBtn','goalBtn','shortcutsBtn'].forEach(id=>document.getElementById(id).style.display='');}
+function showSignin(){['signinScreen'].forEach(id=>document.getElementById(id).style.display='');['loadingScreen','mainApp'].forEach(id=>document.getElementById(id).style.display='none');['syncBtn','addBtn','goalBtn','shortcutsBtn'].forEach(id=>document.getElementById(id).style.display='none');document.querySelector('.topbar').style.display='none';}
+
+function showLoading(msg){document.getElementById('signinScreen').style.display='none';document.getElementById('loadingScreen').style.display='';document.getElementById('mainApp').style.display='none';document.getElementById('loadingText').textContent=msg||'Loading…';document.querySelector('.topbar').style.display='none';}
+function showApp(){document.getElementById('signinScreen').style.display='none';document.getElementById('loadingScreen').style.display='none';document.getElementById('mainApp').style.display='flex';['syncBtn','addBtn','goalBtn','shortcutsBtn'].forEach(id=>document.getElementById(id).style.display='');document.querySelector('.topbar').style.display='flex';}
 
 /* ══════════════════════════════════════════════════════
    DRIVE SYNC
