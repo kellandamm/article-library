@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src googleapis.com accounts.google.com api.allorigins.win api.anthropic.com api.openai.com generativelanguage.googleapis.com http://localhost:11434; script-src 'unsafe-inline' https://accounts.google.com https://www.dropbox.com; style-src 'unsafe-inline'; img-src 'self' data: https:; frame-src https://accounts.google.com;">
+
   <title>Summarized Articles — Kellan's Library</title>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
@@ -236,6 +238,12 @@
   </style>
 </head>
 <body>
+
+<div id="proxyBanner" style="display:none; background:#f0f4f8; border-bottom:1px solid #d1d5db; padding:10px; text-align:center; font-size: 14px; position: sticky; top: 0; z-index: 9999;">
+  Using AllOrigins CORS proxy for RSS. Avoid transmitting sensitive data. 
+  <button onclick="dismissProxyBanner()" style="margin-left: 10px; padding: 2px 8px; cursor: pointer;">Got it</button>
+</div>
+
 <div class="app">
 
   <!-- TOPBAR -->
@@ -1088,6 +1096,274 @@ window.addEventListener('load',()=>{
   const tryInit=()=>{if(typeof google!=='undefined'&&google.accounts)initGIS();};
   tryInit();if(!tokenClient){const t=setInterval(()=>{tryInit();if(tokenClient)clearInterval(t);},300);}
 });
+
+// --- NEW FEATURES LOGIC (AI, Settings, RSS, Dropbox) ---
+async function callAI(messages, system) {
+  const key = sessionKeys[aiProvider];
+  if (aiProvider !== 'ollama' && !key) return "API Key locked or missing. Open Settings to unlock.";
+
+  const traceSystem = `${system}\nFormat output as: ${readingStyle}. Depth level: ${summaryDepth}.`;
+
+  try {
+    if (aiProvider === 'anthropic') {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({ model: aiModel, max_tokens: 1024, system: traceSystem, messages })
+      });
+      const data = await res.json();
+      return data.content[0].text;
+    }
+    if (aiProvider === 'openai') {
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: aiModel || 'gpt-4o-mini',
+          messages: [{ role: 'system', content: traceSystem }, ...messages]
+        })
+      });
+      const data = await res.json();
+      return data.choices[0].message.content;
+    }
+    if (aiProvider === 'gemini') {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${aiModel || 'gemini-1.5-flash'}:generateContent?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: traceSystem }] },
+          contents: messages.map(m => ({
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: m.content }]
+          }))
+        })
+      });
+      const data = await res.json();
+      return data.candidates[0].content.parts[0].text;
+    }
+    if (aiProvider === 'ollama') {
+      const res = await fetch(`${ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: ollamaModel,
+          messages: [{ role: 'system', content: traceSystem }, ...messages],
+          stream: false
+        })
+      });
+      const data = await res.json();
+      return data.message.content;
+    }
+  } catch (err) {
+    return `Error: ${err.message}`;
+  }
+}
+
+async function summarizeArticle(isDeepDive = false) {
+  const article = articles.find(a => a.id === currentArticleId);
+  const prompt = isDeepDive 
+    ? "Provide a comprehensive deep-dive analysis of this article, including context, arguments, and counter-perspectives."
+    : "Summarize this article using bullet points.";
+
+  document.getElementById('aiSummaryArea').textContent = "Generating summary...";
+  const response = await callAI([{role: 'user', content: `${prompt}\n\n${article.content}`}], "You are an expert research assistant.");
+  document.getElementById('aiSummaryArea').textContent = response;
+}
+
+async function sendAIMessage() {
+  const input = document.getElementById('aiChatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  const chatArea = document.getElementById('aiSummaryArea');
+  aiMessages.push({ role: 'user', content: text });
+
+  chatArea.textContent = aiMessages.map(m => `${m.role === 'user' ? 'You' : 'AI'}: ${m.content}`).join('\n\n') + '\n\nAI: Thinking...';
+
+  const article = articles.find(a => a.id === currentArticleId);
+  const system = `You are a helpful assistant discussing the article: "${article.title}".\n\n${article.content}`;
+
+  const response = await callAI(aiMessages, system);
+  aiMessages.push({ role: 'assistant', content: response });
+
+  chatArea.textContent = aiMessages.map(m => `${m.role === 'user' ? 'You' : 'AI'}: ${m.content}`).join('\n\n');
+}
+
+async function saveProviderKey() {
+  const pwd = document.getElementById('masterPwd').value;
+  const key = document.getElementById('apiKeyInput').value;
+  if (!pwd || !key) return alert('Password and Key required.');
+  const encrypted = await encryptApiKey(key, pwd);
+  localStorage.setItem(`ai-key-${aiProvider}`, encrypted);
+  document.getElementById('apiKeyInput').value = '';
+  alert(`${aiProvider} key saved securely!`);
+}
+
+async function unlockProvider() {
+  const pwd = document.getElementById('masterPwd').value || prompt('Enter Master Password:');
+  if (!pwd) return;
+  const encrypted = localStorage.getItem(`ai-key-${aiProvider}`);
+  if (!encrypted) return alert(`No saved key found for ${aiProvider}`);
+
+  const decrypted = await decryptApiKey(encrypted, pwd);
+  if (decrypted) {
+    sessionKeys[aiProvider] = decrypted;
+    alert(`${aiProvider} unlocked for this session!`);
+  } else {
+    alert('Incorrect password.');
+  }
+}
+
+async function fetchArticleFromUrl(url) {
+  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+  const response = await fetch(proxyUrl);
+  const data = await response.json();
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(data.contents, 'text/html');
+  return {
+    title: doc.title || 'Imported Article',
+    content: doc.body.textContent.trim(),
+    url: url
+  };
+}
+
+async function addFeed() {
+  const url = document.getElementById('newFeedUrl').value;
+  if(!url) return;
+  feeds.push({ id: Date.now(), url, name: url, lastSync: null });
+  saveState();
+  document.getElementById('newFeedUrl').value = '';
+  alert('Feed added. Use Sync to fetch articles.');
+}
+
+function importOPML(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(e.target.result, 'text/xml');
+    const outlines = doc.querySelectorAll('outline[xmlUrl]');
+    let added = 0;
+    outlines.forEach(node => {
+      const url = node.getAttribute('xmlUrl');
+      const name = node.getAttribute('title') || node.getAttribute('text') || 'Unknown Feed';
+      if (!feeds.some(f => f.url === url)) {
+        feeds.push({ id: Date.now() + Math.random(), url, name, lastSync: null });
+        added++;
+      }
+    });
+    saveState();
+    alert(`Imported ${added} new feeds successfully.`);
+  };
+  reader.readAsText(file);
+}
+
+function syncDropbox() {
+  if (!window.Dropbox) {
+    const script = document.createElement('script');
+    script.src = 'https://www.dropbox.com/static/api/2/dropins.js';
+    script.id = 'dropboxjs';
+    script.setAttribute('data-app-key', 'YOUR_DROPBOX_APP_KEY'); 
+    script.onload = openDropboxChooser;
+    document.body.appendChild(script);
+  } else {
+    openDropboxChooser();
+  }
+}
+
+function openDropboxChooser() {
+  Dropbox.choose({
+    success: async (files) => {
+      for (const file of files) {
+        const res = await fetch(file.link);
+        const text = await res.text();
+        if (!articles.some(a => a.title === file.name)) {
+          articles.push({ id: Date.now() + Math.random(), title: file.name, content: text, fromDropbox: true });
+        }
+      }
+      saveState();
+      renderArticles();
+    },
+    linkType: "direct",
+    multiselect: true,
+    extensions: ['.txt', '.md', '.html']
+  });
+}
+
+
+window.onload = () => {
+  const hasData = loadState();
+  if (!localStorage.getItem('proxy-notice-dismissed')) {
+    const banner = document.getElementById('proxyBanner');
+    if(banner) banner.style.display = 'block';
+  }
+
+  if (hasData) {
+    showApp(); 
+    if(storageProvider === 'drive' && !token) showSignin();
+  } else {
+    storageProvider === 'drive' ? showSignin() : showApp();
+  }
+};
 </script>
+
+<!-- Settings Modal -->
+<div id="settingsModal" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width: 400px; padding: 20px;">
+    <h2>Settings</h2>
+
+    <label>Storage Provider:</label>
+    <select id="storageSelect" onchange="storageProvider = this.value; saveState();" style="width:100%; padding:8px; margin-bottom:10px;">
+      <option value="local">Local Browser Storage</option>
+      <option value="drive">Google Drive</option>
+      <option value="dropbox">Dropbox</option>
+    </select>
+
+    <label>AI Provider:</label>
+    <select id="aiSelect" onchange="aiProvider = this.value; saveState();" style="width:100%; padding:8px; margin-bottom:10px;">
+      <option value="anthropic">Anthropic</option>
+      <option value="openai">OpenAI</option>
+      <option value="gemini">Google Gemini</option>
+      <option value="ollama">Local Ollama</option>
+    </select>
+
+    <div style="border:1px solid #ccc; padding:10px; border-radius:4px; margin-bottom:15px;">
+      <strong>API Key Encryption</strong><br>
+      <input type="password" id="masterPwd" placeholder="Master Password" style="width:100%; padding:8px; margin:5px 0;">
+      <input type="password" id="apiKeyInput" placeholder="Paste API Key Here" style="width:100%; padding:8px; margin:5px 0;">
+      <div style="display:flex; gap:10px;">
+        <button onclick="saveProviderKey()" class="btn-primary" style="flex:1;">Save Encrypted</button>
+        <button onclick="unlockProvider()" class="btn-secondary" style="flex:1;">Unlock Key</button>
+      </div>
+    </div>
+
+    <button onclick="closeModal('settingsModal')" class="btn-secondary" style="width:100%;">Close</button>
+  </div>
+</div>
+
+<!-- RSS Modal -->
+<div id="rssModal" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width: 500px;">
+    <h3>RSS Feeds & Import</h3>
+    <div style="display:flex; gap:10px; margin-bottom:15px;">
+      <input type="text" id="newFeedUrl" placeholder="https://example.com/feed.xml" style="flex:1; padding:8px;">
+      <button onclick="addFeed()" class="btn-primary">Add Feed</button>
+    </div>
+    <div style="display:flex; gap:10px; margin-bottom:15px;">
+      <input type="file" id="opmlUpload" accept=".opml,.xml" onchange="importOPML(event)" style="display:none;">
+      <button onclick="document.getElementById('opmlUpload').click()" class="btn-secondary" style="flex:1;">Import OPML</button>
+    </div>
+    <div id="feedList" style="max-height: 200px; overflow-y: auto; border: 1px solid #eee; padding: 10px; border-radius: 4px;"></div>
+    <button onclick="closeModal('rssModal')" class="btn-secondary" style="width:100%; margin-top:15px;">Close</button>
+  </div>
+</div>
+
 </body>
 </html>
