@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src googleapis.com accounts.google.com api.allorigins.win api.anthropic.com api.openai.com generativelanguage.googleapis.com http://localhost:11434; script-src 'unsafe-inline' https://accounts.google.com https://www.dropbox.com; style-src 'unsafe-inline'; img-src 'self' data: https:; frame-src https://accounts.google.com;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://*.googleapis.com accounts.google.com api.allorigins.win api.anthropic.com api.openai.com generativelanguage.googleapis.com http://localhost:11434; script-src 'unsafe-inline' https://accounts.google.com https://www.dropbox.com; style-src 'unsafe-inline'; img-src 'self' data: https:; frame-src https://accounts.google.com;">
 
   <title>Summarized Articles — Kellan's Library</title>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -1305,11 +1305,20 @@ window.onload = () => {
     if(banner) banner.style.display = 'block';
   }
 
-  if (hasData) {
-    showApp(); 
-    if(storageProvider === 'drive' && !token) showSignin();
+  // If we have local data, immediately show app and render articles for instant loading
+  if (hasData && articles.length > 0) {
+    showApp();
+    renderArticles(); // Render immediately from local cache
+
+    // If Drive is selected but we aren't authed, silently prompt or just wait for manual Sync click
+    // We remove the blocking showSignin() so the user can just read their cached docs!
   } else {
-    storageProvider === 'drive' ? showSignin() : showApp();
+    // First time or no data
+    if (storageProvider === 'drive') {
+      showSignin();
+    } else {
+      showApp();
+    }
   }
 };
 </script>
