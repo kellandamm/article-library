@@ -251,10 +251,10 @@
       <input type="text" id="searchInput" placeholder="Search articles, tags, collections…" oninput="applyFilters()"/>
     </div>
     <div class="topbar-r">
-      <button class="btn btn-ghost" id="syncBtn" onclick="syncDrive()" style="display:none">🔄 Sync</button>
+      <button class="btn btn-ghost" id="syncBtn" onclick="handleSync()" style="display:none">🔄 Sync</button>
       <button class="btn btn-ghost" id="goalBtn" onclick="openModal('goalModal')" style="display:none" title="Reading goal">🎯</button>
       <button class="btn btn-ghost" id="shortcutsBtn" onclick="openModal('shortcutsModal')" style="display:none" title="Keyboard shortcuts">⌨️</button>
-      <button class="btn btn-ghost" id="rssBtn" onclick="document.getElementById('rssModal').classList.remove('hidden')" style="display:inline-block" title="RSS Feeds">📰 RSS</button>
+      <button class="btn btn-ghost" id="rssBtn" onclick="renderFeeds(); document.getElementById('rssModal').classList.remove('hidden')" style="display:inline-block" title="RSS Feeds">📰 RSS</button>
       <button class="btn btn-ghost" id="settingsBtn" onclick="document.getElementById('settingsModal').classList.remove('hidden')" style="display:inline-block" title="Settings">⚙️</button>
       <button class="btn btn-primary" id="addBtn" onclick="openAddModal()" style="display:none">＋ Add</button>
       <div class="auth-badge" id="authBadge" onclick="handleAuthClick()" style="display:none">
@@ -315,7 +315,7 @@
 
       <div class="sb-section">Drive</div>
       <div class="sb-item" onclick="window.open('https://drive.google.com/drive/folders/1gyLrAY49xbECJetzr5B4SntI33LyCJ7k','_blank')"><span class="icon">☁️</span>Open Folder</div>
-      <div class="sb-item" onclick="syncDrive()"><span class="icon">🔄</span>Sync Now</div>
+      <div class="sb-item" onclick="handleSync()"><span class="icon">🔄</span>Sync Now</div>
       <div class="sb-item" onclick="exportAll()"><span class="icon">💾</span>Export All</div>
       <div class="sb-item" onclick="signOut()"><span class="icon">🚪</span>Sign Out</div>
 
@@ -731,7 +731,7 @@ function applyFilters(){
   const c=document.getElementById('articleContainer');
   c.className=viewMode==='grid'?'grid':'list-view';
   if(list.length===0){
-    c.innerHTML=`<div class="empty-state"><div class="es-icon">${articles.length===0&&archived.length===0?'☁️':'🔍'}</div><h3>${articles.length===0&&archived.length===0?'Folder is empty':'Nothing matches'}</h3><p>${articles.length===0&&archived.length===0?'Add Google Docs to your <a href="https://drive.google.com/drive/folders/'+FOLDER_ID+'" target="_blank" style="color:var(--accent)">Summarized Articles</a> folder, then Sync.':'Try a different search or filter.'}</p>${articles.length===0&&archived.length===0?'<button class="btn btn-primary" onclick="syncDrive()">🔄 Sync Drive</button>':''}</div>`;
+    c.innerHTML=`<div class="empty-state"><div class="es-icon">${articles.length===0&&archived.length===0?'☁️':'🔍'}</div><h3>${articles.length===0&&archived.length===0?'Folder is empty':'Nothing matches'}</h3><p>${articles.length===0&&archived.length===0?'Add Google Docs to your <a href="https://drive.google.com/drive/folders/'+FOLDER_ID+'" target="_blank" style="color:var(--accent)">Summarized Articles</a> folder, then Sync.':'Try a different search or filter.'}</p>${articles.length===0&&archived.length===0?'<button class="btn btn-primary" onclick="handleSync()">🔄 Sync Drive</button>':''}</div>`;
     return;
   }
   c.innerHTML=list.map((a,i)=>{
@@ -835,6 +835,10 @@ function updateSidebar(){
    ARTICLE ACTIONS
 ══════════════════════════════════════════════════════ */
 function openArticle(id){
+  aiMessages = [];
+  const aiArea = document.getElementById('aiSummaryArea');
+  if(aiArea) { aiArea.style.display = 'none'; aiArea.textContent = ''; }
+
   const pool=[...articles,...archived];
   const a=pool.find(x=>x.id===id);if(!a)return;
   activeId=id;
@@ -913,6 +917,15 @@ function saveState() {
     const state = { articles, archived, collections, goal, feeds, viewMode, sortMode, storageProvider, aiProvider, aiModel, ollamaUrl, ollamaModel, readingStyle, summaryDepth };
     localStorage.setItem('appState', JSON.stringify(state));
   }, 300);
+}
+
+
+function clearLocalData() {
+  if(confirm("DANGER: This will delete all local articles, feeds, and settings. Proceed?")) {
+    localStorage.removeItem('appState');
+    localStorage.removeItem('proxy-notice-dismissed');
+    window.location.reload();
+  }
 }
 
 function loadState() {
@@ -1317,6 +1330,24 @@ async function unlockProvider() {
   }
 }
 
+
+async function handleUrlImport() {
+  const urlInput = document.getElementById('importUrlField');
+  if (!urlInput.value) return;
+  urlInput.disabled = true;
+  if(typeof toast === 'function') toast('Fetching article...', 'info');
+  try {
+    const article = await fetchArticleFromUrl(urlInput.value);
+    document.getElementById('addTitle').value = article.title;
+    document.getElementById('addContent').value = article.content;
+    document.getElementById('addUrl').value = article.url;
+    if(typeof toast === 'function') toast('Article fetched!', 'success');
+  } catch (err) {
+    alert('Failed to fetch article. The site might be blocking access.');
+  }
+  urlInput.disabled = false;
+}
+
 async function fetchArticleFromUrl(url) {
   const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
   const response = await fetch(proxyUrl);
@@ -1336,7 +1367,7 @@ async function addFeed() {
   feeds.push({ id: Date.now(), url, name: url, lastSync: null });
   saveState();
   document.getElementById('newFeedUrl').value = '';
-  alert('Feed added. Use Sync to fetch articles.');
+  renderFeeds(); alert('Feed added. Use Sync to fetch articles.');
 }
 
 function importOPML(event) {
@@ -1357,9 +1388,121 @@ function importOPML(event) {
       }
     });
     saveState();
-    alert(`Imported ${added} new feeds successfully.`);
+    renderFeeds(); alert(`Imported ${added} new feeds successfully.`);
   };
   reader.readAsText(file);
+}
+
+function renderFeeds() {
+  const list = document.getElementById('feedList');
+  if (!list) return;
+  if (!feeds || feeds.length === 0) {
+    list.innerHTML = '<div style="color:#666; font-size:0.9em; text-align:center; padding: 20px 0;">No feeds added yet. Import OPML or add a URL above.</div>';
+    return;
+  }
+  list.innerHTML = feeds.map(f => `
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #eee;">
+      <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:65%;" title="${f.url}">
+        <strong>${f.name}</strong> <span style='font-size:0.8em;color:#888;'>(${articles.filter(a=>a.tags && a.tags.includes(f.name)).length})</span><br>
+        <span style="font-size:0.8em; color:#666;">${f.url}</span>
+      </div>
+      <div style="display:flex; gap:5px;">
+        <button onclick="syncFeed(${f.id})" class="btn btn-primary" style="font-size:0.8em; padding:4px 8px; min-width:auto;">🔄</button>
+        <button onclick="removeFeed(${f.id})" class="btn btn-ghost" style="color:red; font-size:0.8em; padding:4px 8px; border:1px solid #ccc; min-width:auto;">🗑️</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+
+async function syncFeeds() {
+  if (!feeds || feeds.length === 0) return alert('No feeds to sync.');
+  if (typeof toast === 'function') toast('Syncing all feeds...', 'info');
+  await Promise.all(feeds.map(f => syncFeed(f.id)));
+  if (typeof toast === 'function') toast('All feeds synced!', 'success');
+  renderFeeds();
+}
+
+function exportOPML() {
+  let opml = `<?xml version="1.0" encoding="UTF-8"?>\n<opml version="2.0">\n<head>\n<title>My RSS Feeds</title>\n</head>\n<body>\n`;
+  feeds.forEach(f => {
+    opml += `<outline text="${f.name.replace(/&/g, '&amp;')}" title="${f.name.replace(/&/g, '&amp;')}" type="rss" xmlUrl="${f.url.replace(/&/g, '&amp;')}"/>\n`;
+  });
+  opml += `</body>\n</opml>`;
+
+  const blob = new Blob([opml], { type: 'text/xml' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'feeds.opml';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function removeFeed(id) {
+  if(!confirm('Remove this feed?')) return;
+  feeds = feeds.filter(f => f.id !== id);
+  saveState();
+  renderFeeds();
+}
+
+async function syncFeed(id) {
+  const feed = feeds.find(f => f.id === id);
+  if (!feed) return;
+
+  if (typeof toast === 'function') toast(`Syncing ${feed.name}...`, 'info');
+  try {
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(feed.url)}`;
+    const res = await fetch(proxyUrl);
+    const data = await res.json();
+
+    const parser = new DOMParser();
+    const xml = parser.parseFromString(data.contents, "text/xml");
+    const items = xml.querySelectorAll("item, entry");
+    let added = 0;
+
+    items.forEach(item => {
+      const title = (item.querySelector("title")?.textContent || "Untitled").trim();
+      const link = item.querySelector("link")?.textContent || item.querySelector("link")?.getAttribute("href") || "";
+      let content = (item.querySelector("description")?.textContent || item.querySelector("content")?.textContent || "").trim();
+
+      // Strip HTML to store clean text (Content Sanitization)
+      const tmp = document.createElement("div");
+      tmp.innerHTML = content;
+      content = tmp.textContent || tmp.innerText || "";
+
+      if (!articles.some(a => a.url === link || a.title === title)) {
+        articles.push({
+          id: Date.now() + Math.random(),
+          title: title,
+          content: content,
+          url: link,
+          addedAt: Date.now(),
+          read: false,
+          fav: false,
+          archived: false,
+          tags: ['RSS', feed.name] // Tag imported articles
+        });
+        added++;
+      }
+    });
+
+    feed.lastSync = Date.now();
+    saveState();
+    if (typeof renderArticles === 'function') renderArticles();
+    if (typeof toast === 'function') toast(`Synced ${feed.name}: ${added} new articles`, 'success');
+  } catch(e) {
+    console.error(e);
+    if (typeof toast === 'function') toast(`Failed to sync ${feed.name}`, 'error');
+  }
+}
+
+
+
+function handleSync() {
+  if(storageProvider === 'drive') { if(typeof syncDrive === 'function') syncDrive(); }
+  else if(storageProvider === 'dropbox') { if(typeof syncDropbox === 'function') syncDropbox(); }
+  else { alert('Local mode active. No cloud sync required.'); }
 }
 
 function syncDropbox() {
@@ -1417,6 +1560,18 @@ function openDropboxChooser() {
       <option value="gemini">Google Gemini</option>
       <option value="ollama">Local Ollama</option>
     </select>
+    <div id="ollamaSettings" style="display:none; margin-bottom:10px; padding:10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px;">
+      <label style="font-size:0.9em;">Ollama URL:</label>
+      <input type="text" id="ollamaUrlInput" onchange="ollamaUrl=this.value; saveState();" style="width:100%; padding:5px; margin-bottom:5px;">
+      <label style="font-size:0.9em;">Ollama Model:</label>
+      <input type="text" id="ollamaModelInput" onchange="ollamaModel=this.value; saveState();" style="width:100%; padding:5px;">
+    </div>
+    <script>
+      document.getElementById('aiSelect').addEventListener('change', function() {
+        document.getElementById('ollamaSettings').style.display = this.value === 'ollama' ? 'block' : 'none';
+      });
+    </script>
+    
 
     <label>Reading Style (YourTrace):</label>
     <select id="styleSelect" onchange="readingStyle = this.value; saveState();" style="width:100%; padding:8px; margin-bottom:10px;">
@@ -1435,6 +1590,10 @@ function openDropboxChooser() {
       </div>
     </div>
 
+    
+    <div style="border-top:1px solid #eee; margin-top:15px; padding-top:15px; display:flex; gap:10px;">
+      <button onclick="clearLocalData()" class="btn btn-ghost" style="flex:1; border:1px solid red; color:red;">Clear All Data</button>
+    </div>
     <button onclick="document.getElementById('settingsModal').classList.add('hidden')" class="btn btn-ghost" style="width:100%; border:1px solid #ccc;">Close</button>
   </div>
 </div>
@@ -1450,6 +1609,8 @@ function openDropboxChooser() {
     <div style="display:flex; gap:10px; margin-bottom:15px;">
       <input type="file" id="opmlUpload" accept=".opml,.xml" onchange="importOPML(event)" style="display:none;">
       <button onclick="document.getElementById('opmlUpload').click()" class="btn btn-ghost" style="flex:1; border:1px solid #ccc;">Import OPML</button>
+      <button onclick="exportOPML()" class="btn btn-ghost" style="flex:1; border:1px solid #ccc;">Export OPML</button>
+      <button onclick="syncFeeds()" class="btn btn-primary" style="flex:1;">Sync All</button>
     </div>
     <div id="feedList" style="max-height: 200px; overflow-y: auto; border: 1px solid #eee; padding: 10px; border-radius: 4px;"></div>
     <button onclick="document.getElementById('rssModal').classList.add('hidden')" class="btn btn-ghost" style="width:100%; margin-top:15px; border:1px solid #ccc;">Close</button>
