@@ -614,9 +614,14 @@ let tokenClient;
 function initGIS(){
   tokenClient=google.accounts.oauth2.initTokenClient({
     client_id:CLIENT_ID,scope:SCOPE,
-    callback:async(r)=>{
+    callback:(r)=>{
       if(r.error){toast('Auth error: '+r.error,'error');showSignin();return;}
-      token=r.access_token;updateBadge(true);await syncDrive();
+      token=r.access_token;updateBadge(true);
+      // We explicitly DO NOT call syncDrive() here anymore.
+      // Authentication just gives us the token. Syncing only happens when they click "Sync".
+      showApp();
+      if(articles.length > 0) { renderArticles(); }
+      toast('Google Drive Connected. Click Sync to fetch new articles.','success');
     }
   });
 }
@@ -851,7 +856,7 @@ function toggleFavModal(){
 }
 function markRead(id){
   const a=articles.find(x=>x.id===id);
-  if(a){a.read=!a.read;applyFilters();toast(a.read?'Marked read ✓':'Marked unread','info');}
+  if(a){a.read=!a.read; saveState();applyFilters();toast(a.read?'Marked read ✓':'Marked unread','info');}
 }
 function saveNotes(){
   if(!activeId)return;
@@ -862,12 +867,12 @@ function saveNotes(){
 // ARCHIVE
 function archiveArticle(id){
   const idx=articles.findIndex(x=>x.id===id);if(idx===-1)return;
-  const a=articles.splice(idx,1)[0];a.archived=true;archived.push(a);
+  const a=articles.splice(idx,1)[0];a.archived=true; saveState();archived.push(a);
   applyFilters();toast(`"${a.title}" archived 📦`,'info');
 }
 function restoreArticle(id){
   const idx=archived.findIndex(x=>x.id===id);if(idx===-1)return;
-  const a=archived.splice(idx,1)[0];a.archived=false;articles.push(a);
+  const a=archived.splice(idx,1)[0];a.archived=false; saveState();articles.push(a);
   applyFilters();toast(`"${a.title}" restored ✓`,'success');
 }
 function archiveFromModal(){if(activeId){closeModal('readModal');archiveArticle(activeId);activeId=null;}}
