@@ -1297,23 +1297,18 @@ function openDropboxChooser() {
   });
 }
 
-
 window.onload = () => {
-  const hasData = loadState();
+  const hasData = loadState(); 
+
   if (!localStorage.getItem('proxy-notice-dismissed')) {
     const banner = document.getElementById('proxyBanner');
     if(banner) banner.style.display = 'block';
   }
 
-  // If we have local data, immediately show app and render articles for instant loading
   if (hasData && articles.length > 0) {
     showApp();
-    renderArticles(); // Render immediately from local cache
-
-    // If Drive is selected but we aren't authed, silently prompt or just wait for manual Sync click
-    // We remove the blocking showSignin() so the user can just read their cached docs!
+    renderArticles(); 
   } else {
-    // First time or no data
     if (storageProvider === 'drive') {
       showSignin();
     } else {
