@@ -4,7 +4,6 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://*.googleapis.com accounts.google.com api.allorigins.win api.anthropic.com api.openai.com generativelanguage.googleapis.com http://localhost:11434; script-src 'unsafe-inline' https://accounts.google.com https://www.dropbox.com; style-src 'unsafe-inline'; img-src 'self' data: https:; frame-src https://accounts.google.com;">
-
   <title>Summarized Articles — Kellan's Library</title>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
@@ -238,12 +237,10 @@
   </style>
 </head>
 <body>
-
 <div id="proxyBanner" style="display:none; background:#f0f4f8; border-bottom:1px solid #d1d5db; padding:10px; text-align:center; font-size: 14px; position: sticky; top: 0; z-index: 9999;">
   Using AllOrigins CORS proxy for RSS. Avoid transmitting sensitive data. 
   <button onclick="dismissProxyBanner()" style="margin-left: 10px; padding: 2px 8px; cursor: pointer;">Got it</button>
 </div>
-
 <div class="app">
 
   <!-- TOPBAR -->
@@ -257,6 +254,8 @@
       <button class="btn btn-ghost" id="syncBtn" onclick="syncDrive()" style="display:none">🔄 Sync</button>
       <button class="btn btn-ghost" id="goalBtn" onclick="openModal('goalModal')" style="display:none" title="Reading goal">🎯</button>
       <button class="btn btn-ghost" id="shortcutsBtn" onclick="openModal('shortcutsModal')" style="display:none" title="Keyboard shortcuts">⌨️</button>
+      <button class="btn btn-ghost" id="rssBtn" onclick="document.getElementById('rssModal').classList.remove('hidden')" style="display:inline-block" title="RSS Feeds">📰 RSS</button>
+      <button class="btn btn-ghost" id="settingsBtn" onclick="document.getElementById('settingsModal').classList.remove('hidden')" style="display:inline-block" title="Settings">⚙️</button>
       <button class="btn btn-primary" id="addBtn" onclick="openAddModal()" style="display:none">＋ Add</button>
       <div class="auth-badge" id="authBadge" onclick="handleAuthClick()" style="display:none">
         <span class="dot off" id="authDot"></span>
@@ -412,6 +411,20 @@
 
       <!-- Article content -->
       <div class="read-content" id="readContent" onscroll="updateBar()"></div>
+      <!-- AI YourTrace Panel -->
+      <div id="aiPanel" style="border-top: 1px solid #eee; margin-top: 20px; padding-top: 20px;">
+        <div style="display:flex; gap:10px; margin-bottom:15px;">
+          <button onclick="summarizeArticle(false)" class="btn btn-secondary">🤖 AI Summary</button>
+          <button onclick="summarizeArticle(true)" class="btn btn-primary" style="background:#6366f1;">🔍 Deep Dive (YourTrace)</button>
+        </div>
+        <div id="aiSummaryArea" style="white-space: pre-wrap; margin: 10px 0; background: #f9fafb; padding: 15px; border-radius: 8px; border: 1px solid #e5e7eb; font-size: 0.95em; display:none;"></div>
+
+        <div style="display:flex; gap:10px; margin-top: 15px;">
+          <input type="text" id="aiChatInput" placeholder="Ask AI about this article..." style="flex:1; padding:8px; border:1px solid #ccc; border-radius:4px;">
+          <button onclick="sendAIMessage()" class="btn btn-primary">Ask</button>
+        </div>
+      </div>
+    
 
       <!-- Related articles -->
       <div class="related-section" id="relatedSection">
@@ -584,6 +597,29 @@ let filter = 'all';
 let collFilter = null;   // collection id filter
 let tagFilter = null;
 let sortMode = 'newest';
+// --- NEW STATE & YOURTRACE FEATURES ---
+let feeds = [];
+let storageProvider = 'local';
+let aiProvider = 'anthropic';
+let aiModel = 'claude-haiku-4-5-20251001';
+let ollamaUrl = 'http://localhost:11434';
+let ollamaModel = 'llama3.2';
+let sessionKeys = {};
+let aiMessages = [];
+let aiLoading = false;
+
+// YourTrace Features
+let readingStyle = 'concise'; 
+let summaryDepth = 'standard'; 
+let feedMode = 'all'; 
+
+// --- STORAGE PROVIDERS ---
+const STORAGE = {
+  drive: { name: 'Google Drive', sync: syncDrive },
+  local: { name: 'Local Only', sync: () => alert('Local mode — data is saved to your browser automatically.') },
+  dropbox: { name: 'Dropbox', sync: syncDropbox }
+};
+
 let viewMode = 'grid';
 
 let goal = { daily: 5, todayRead: 0, streak: 0 };
@@ -617,8 +653,6 @@ function initGIS(){
     callback:(r)=>{
       if(r.error){toast('Auth error: '+r.error,'error');showSignin();return;}
       token=r.access_token;updateBadge(true);
-      // We explicitly DO NOT call syncDrive() here anymore.
-      // Authentication just gives us the token. Syncing only happens when they click "Sync".
       showApp();
       if(articles.length > 0) { renderArticles(); }
       toast('Google Drive Connected. Click Sync to fetch new articles.','success');
@@ -838,6 +872,61 @@ function openArticle(id){
   // TTS reset
   ttsStop();document.getElementById('ttsBar').classList.add('hidden');
   openModal('readModal');applyFilters();
+}
+
+
+// --- CRYPTO & PERSISTENCE ---
+async function encryptApiKey(key, password) {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), {name: 'PBKDF2'}, false, ['deriveKey']);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const aesKey = await crypto.subtle.deriveKey(
+    {name: 'PBKDF2', salt: salt, iterations: 100000, hash: 'SHA-256'},
+    keyMaterial, {name: 'AES-GCM', length: 256}, false, ['encrypt']
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({name: 'AES-GCM', iv: iv}, aesKey, enc.encode(key));
+  const bundle = new Uint8Array(salt.length + iv.length + ciphertext.byteLength);
+  bundle.set(salt, 0); bundle.set(iv, salt.length); bundle.set(new Uint8Array(ciphertext), salt.length + iv.length);
+  return btoa(String.fromCharCode(...bundle));
+}
+
+async function decryptApiKey(blob, password) {
+  try {
+    const raw = Uint8Array.from(atob(blob), c => c.charCodeAt(0));
+    const salt = raw.slice(0, 16), iv = raw.slice(16, 28), ciphertext = raw.slice(28);
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), {name: 'PBKDF2'}, false, ['deriveKey']);
+    const aesKey = await crypto.subtle.deriveKey(
+      {name: 'PBKDF2', salt: salt, iterations: 100000, hash: 'SHA-256'},
+      keyMaterial, {name: 'AES-GCM', length: 256}, false, ['decrypt']
+    );
+    const plaintext = await crypto.subtle.decrypt({name: 'AES-GCM', iv: iv}, aesKey, ciphertext);
+    return new TextDecoder().decode(plaintext);
+  } catch { return null; }
+}
+
+let saveTimeout;
+function saveState() {
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    const state = { articles, archived, collections, goal, feeds, viewMode, sortMode, storageProvider, aiProvider, aiModel, ollamaUrl, ollamaModel, readingStyle, summaryDepth };
+    localStorage.setItem('appState', JSON.stringify(state));
+  }, 300);
+}
+
+function loadState() {
+  const saved = localStorage.getItem('appState');
+  if (saved) {
+    Object.assign(window, JSON.parse(saved));
+    return true;
+  }
+  return false;
+}
+
+function dismissProxyBanner() {
+  localStorage.setItem('proxy-notice-dismissed', 'true');
+  document.getElementById('proxyBanner').style.display = 'none';
 }
 
 function updateBar(){
@@ -1175,9 +1264,11 @@ async function summarizeArticle(isDeepDive = false) {
     ? "Provide a comprehensive deep-dive analysis of this article, including context, arguments, and counter-perspectives."
     : "Summarize this article using bullet points.";
 
-  document.getElementById('aiSummaryArea').textContent = "Generating summary...";
+  const aiArea = document.getElementById('aiSummaryArea');
+  aiArea.style.display = 'block';
+  aiArea.textContent = "Generating summary...";
   const response = await callAI([{role: 'user', content: `${prompt}\n\n${article.content}`}], "You are an expert research assistant.");
-  document.getElementById('aiSummaryArea').textContent = response;
+  aiArea.textContent = response;
 }
 
 async function sendAIMessage() {
@@ -1187,6 +1278,7 @@ async function sendAIMessage() {
   input.value = '';
 
   const chatArea = document.getElementById('aiSummaryArea');
+  chatArea.style.display = 'block';
   aiMessages.push({ role: 'user', content: text });
 
   chatArea.textContent = aiMessages.map(m => `${m.role === 'user' ? 'You' : 'AI'}: ${m.content}`).join('\n\n') + '\n\nAI: Thinking...';
@@ -1302,31 +1394,14 @@ function openDropboxChooser() {
   });
 }
 
-window.onload = () => {
-  const hasData = loadState(); 
+// Remove old window.onload completely to avoid conflicts
 
-  if (!localStorage.getItem('proxy-notice-dismissed')) {
-    const banner = document.getElementById('proxyBanner');
-    if(banner) banner.style.display = 'block';
-  }
-
-  if (hasData && articles.length > 0) {
-    showApp();
-    renderArticles(); 
-  } else {
-    if (storageProvider === 'drive') {
-      showSignin();
-    } else {
-      showApp();
-    }
-  }
-};
 </script>
 
 <!-- Settings Modal -->
-<div id="settingsModal" class="modal" style="display:none;">
+<div class="modal-overlay hidden" id="settingsModal" onclick="overlayClose(event,'settingsModal')">
   <div class="modal-content" style="max-width: 400px; padding: 20px;">
-    <h2>Settings</h2>
+    <h2>⚙️ Settings</h2>
 
     <label>Storage Provider:</label>
     <select id="storageSelect" onchange="storageProvider = this.value; saveState();" style="width:100%; padding:8px; margin-bottom:10px;">
@@ -1343,36 +1418,42 @@ window.onload = () => {
       <option value="ollama">Local Ollama</option>
     </select>
 
+    <label>Reading Style (YourTrace):</label>
+    <select id="styleSelect" onchange="readingStyle = this.value; saveState();" style="width:100%; padding:8px; margin-bottom:10px;">
+      <option value="concise">Concise</option>
+      <option value="analytical">Analytical</option>
+      <option value="beginner">Beginner Friendly</option>
+    </select>
+
     <div style="border:1px solid #ccc; padding:10px; border-radius:4px; margin-bottom:15px;">
       <strong>API Key Encryption</strong><br>
       <input type="password" id="masterPwd" placeholder="Master Password" style="width:100%; padding:8px; margin:5px 0;">
       <input type="password" id="apiKeyInput" placeholder="Paste API Key Here" style="width:100%; padding:8px; margin:5px 0;">
       <div style="display:flex; gap:10px;">
-        <button onclick="saveProviderKey()" class="btn-primary" style="flex:1;">Save Encrypted</button>
-        <button onclick="unlockProvider()" class="btn-secondary" style="flex:1;">Unlock Key</button>
+        <button onclick="saveProviderKey()" class="btn btn-primary" style="flex:1;">Save Encrypted</button>
+        <button onclick="unlockProvider()" class="btn btn-ghost" style="flex:1; border:1px solid #ccc;">Unlock Key</button>
       </div>
     </div>
 
-    <button onclick="closeModal('settingsModal')" class="btn-secondary" style="width:100%;">Close</button>
+    <button onclick="document.getElementById('settingsModal').classList.add('hidden')" class="btn btn-ghost" style="width:100%; border:1px solid #ccc;">Close</button>
   </div>
 </div>
 
 <!-- RSS Modal -->
-<div id="rssModal" class="modal" style="display:none;">
+<div class="modal-overlay hidden" id="rssModal" onclick="overlayClose(event,'rssModal')">
   <div class="modal-content" style="max-width: 500px;">
-    <h3>RSS Feeds & Import</h3>
-    <div style="display:flex; gap:10px; margin-bottom:15px;">
+    <h3>📰 RSS Feeds & Import</h3>
+    <div style="display:flex; gap:10px; margin-bottom:15px; margin-top:10px;">
       <input type="text" id="newFeedUrl" placeholder="https://example.com/feed.xml" style="flex:1; padding:8px;">
-      <button onclick="addFeed()" class="btn-primary">Add Feed</button>
+      <button onclick="addFeed()" class="btn btn-primary">Add Feed</button>
     </div>
     <div style="display:flex; gap:10px; margin-bottom:15px;">
       <input type="file" id="opmlUpload" accept=".opml,.xml" onchange="importOPML(event)" style="display:none;">
-      <button onclick="document.getElementById('opmlUpload').click()" class="btn-secondary" style="flex:1;">Import OPML</button>
+      <button onclick="document.getElementById('opmlUpload').click()" class="btn btn-ghost" style="flex:1; border:1px solid #ccc;">Import OPML</button>
     </div>
     <div id="feedList" style="max-height: 200px; overflow-y: auto; border: 1px solid #eee; padding: 10px; border-radius: 4px;"></div>
-    <button onclick="closeModal('rssModal')" class="btn-secondary" style="width:100%; margin-top:15px;">Close</button>
+    <button onclick="document.getElementById('rssModal').classList.add('hidden')" class="btn btn-ghost" style="width:100%; margin-top:15px; border:1px solid #ccc;">Close</button>
   </div>
 </div>
-
 </body>
 </html>
